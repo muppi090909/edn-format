@@ -1,11 +1,14 @@
 use bigdecimal::BigDecimal;
-use std::str::FromStr;
-use logos::{Lexer, Logos, skip};
+use logos::{skip, Lexer, Logos};
 use nom::{
     bytes::complete::{tag, take_till1, take_until},
     error::Error as NomError,
 };
 use num_bigint::BigInt;
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+};
 fn keyword_get(lex: &mut Lexer<Token>) -> Option<Keyword> {
     let output: (&str, &str) =
         take_till1::<_, &str, NomError<&str>>(|c| c == '/')(lex.slice()).unwrap();
@@ -30,10 +33,42 @@ fn keyword_get(lex: &mut Lexer<Token>) -> Option<Keyword> {
         });
     }
 }
-
+fn bigdecimal_lex(lex: &mut Lexer<Token>) -> BigDecimal {
+    let output = tag::<&str, &str, NomError<&str>>("M")(lex.slice());
+    match output {
+        Ok(num) => return BigDecimal::from_str(num.0).unwrap(),
+        Err(_) => return BigDecimal::from_str(lex.slice()).unwrap(),
+    }
+}
 fn symbol_get(lex: &mut Lexer<Token>) -> Option<Symbol> {
     let output: (&str, &str) =
         take_till1::<_, &str, NomError<&str>>(|c| c == '/')(lex.slice()).unwrap();
+    if output.0.starts_with('/') {
+        if output.1 == "" {
+            return Some(Symbol {
+                namespace: None,
+                name: output.0.to_string(),
+            });
+        } else {
+            return Some(Symbol {
+                namespace: Some(output.1.to_string()),
+                name: output.0.get(1..).unwrap().to_string(),
+            });
+        }
+    } else {
+        return Some(Symbol {
+            namespace: None,
+            name: output.1.to_string(),
+        });
+    }
+}
+fn tag_get(lex: &mut Lexer<Token>) -> Option<Symbol> {
+    let output = take_till1::<_, &str, NomError<&str>>(|c| c == '/')(
+        tag::<&str, &str, NomError<&str>>("#")(lex.slice())
+            .unwrap()
+            .0,
+    )
+    .unwrap();
     if output.0.starts_with('/') {
         if output.1 == "" {
             return Some(Symbol {
@@ -83,10 +118,12 @@ pub enum Token {
     Nil,
     #[regex(r"\s", skip)]
     Space,
-    #[regex(r#"[^:^\s][^\s^"]+"#, symbol_get)]
+    #[regex(r#"[^:^\s^#][^\s^"]+"#, symbol_get)]
     Symbol(Symbol),
     #[token(r"\n", skip)]
     NewLine,
+    #[regex(r#"#[^\s^"]+"#, tag_get)]
+    Tag(Symbol),
     #[regex(r"[\t|\s\s\s\s]", skip, priority = 2)]
     Tab,
     #[token(r"{")]
@@ -105,16 +142,18 @@ pub enum Token {
     SetStart,
     #[regex(r"\d+", |lex| BigInt::from_str(lex.slice()).unwrap(), priority = 3)]
     BigInt(BigInt),
-    #[regex(r"\d+\.\d+", |lex| BigDecimal::from_str(lex.slice()).unwrap(), priority = 3)]
+    #[regex(r"M?\d+\.\d+", bigdecimal_lex)]
     BigDec(BigDecimal),
+    #[regex(r"#_\s?[^\n]+", skip)]
+    Discard,
     #[error]
     Error,
 }
-
 #[inline(always)]
 pub fn lex_str(input: &str) -> Vec<Token> {
     Token::lexer(input).collect()
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,26 +214,77 @@ mod tests {
     #[test]
     fn vector_tests() {
         let tokens = lex_str("[ \"Hello\" \"World\" ]");
-        assert_eq!(tokens, vec![Token::VectorStart, Token::Str("Hello".to_string()), Token::Str("World".to_string()), Token::VectorEnd])
+        assert_eq!(
+            tokens,
+            vec![
+                Token::VectorStart,
+                Token::Str("Hello".to_string()),
+                Token::Str("World".to_string()),
+                Token::VectorEnd
+            ]
+        )
     }
     #[test]
     fn maps_tests() {
         let tokens = lex_str("{ \"A\" \"B\" }");
-        assert_eq!(tokens, vec![Token::MapStart, Token::Str("A".to_string()), Token::Str("B".to_string()), Token::SetMapEnd])
+        assert_eq!(
+            tokens,
+            vec![
+                Token::MapStart,
+                Token::Str("A".to_string()),
+                Token::Str("B".to_string()),
+                Token::SetMapEnd
+            ]
+        )
     }
     #[test]
     fn set_tests() {
         let tokens = lex_str("#{ \"A\" \"B\" }");
-        assert_eq!(tokens, vec![Token::SetStart, Token::Str("A".to_string()), Token::Str("B".to_string()), Token::SetMapEnd])
+        assert_eq!(
+            tokens,
+            vec![
+                Token::SetStart,
+                Token::Str("A".to_string()),
+                Token::Str("B".to_string()),
+                Token::SetMapEnd
+            ]
+        )
     }
     #[test]
     fn bigint_tests() {
         let mut lexer = Token::lexer("12");
-        assert_eq!(lexer.next(), Some(Token::BigInt(BigInt::from_str("12").unwrap())))
+        assert_eq!(
+            lexer.next(),
+            Some(Token::BigInt(BigInt::from_str("12").unwrap()))
+        )
     }
     #[test]
     fn bigdec_tests() {
         let mut lexer = Token::lexer("12.3");
-        assert_eq!(lexer.next(), Some(Token::BigDec(BigDecimal::from_str("12.3").unwrap())))
+        assert_eq!(
+            lexer.next(),
+            Some(Token::BigDec(BigDecimal::from_str("12.3").unwrap()))
+        );
+        let mut lexer = Token::lexer("M12.3");
+        assert_eq!(
+            lexer.next(),
+            Some(Token::BigDec(BigDecimal::from_str("12.3").unwrap()))
+        );
+    }
+    #[test]
+    fn tag_tests() {
+        let mut lexer = Token::lexer("#hello");
+        assert_eq!(
+            lexer.next(),
+            Some(Token::Tag(Symbol {
+                namespace: None,
+                name: "hello".to_string()
+            }))
+        )
+    }
+    #[test]
+    fn discard_tests() {
+        let mut lexer = Token::lexer("#_Hello");
+        assert_eq!(lexer.next(), None)
     }
 }
