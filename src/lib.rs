@@ -122,6 +122,8 @@ enum Token {
     Space,
     #[regex(r#"[^:^\s^#^;][^\s^"]+"#, symbol_get)]
     Symbol(Symbol),
+    #[token(r"#_")]
+    Discard,
     #[token(r"\n", skip)]
     NewLine,
     #[regex(r#"#[^\s^"]+"#, tag_get)]
@@ -218,7 +220,8 @@ impl Value {
                 Token::SetStart => todo!(),
                 Token::BigInt(int) => values.push(Value::BigInt(int)),
                 Token::BigDec(dec) => values.push(Value::BigDec(dec)),
-                Token::Error => {}
+                Token::Error => {},
+                Token::Discard => {}
             }
         }
         values
@@ -228,58 +231,6 @@ impl Value {
     }
 }
 fn lex_str(input: &str) -> Vec<Token> {
-    let mut words: Vec<&str> = input.split(" ").collect();
-    let mut pars = 0usize;
-    while let Some(i) = words.iter().position(|x| *x == "#_" || x.starts_with("#_")) {
-        if i != words.len() {
-            if &"#{" == words.get(i + 1).expect("Should not occur")
-                || &"{" == words.get(i + 1).expect("Should not occur")
-                || &"[" == words.get(i + 1).expect("Should not occur")
-            {
-                pars += 1;
-                let mut buffer = Vec::new();
-                for (j, _) in words.clone().iter().enumerate() {
-                    if j == i {
-                        pars -= 1;
-                    }
-                    if &"#{" == words.get(j + 1).unwrap_or(&"0")
-                        || &"{" == words.get(j + 1).unwrap_or(&"0")
-                        || &"[" == words.get(j + 1).unwrap_or(&"0")
-                    {
-                        pars += 1;
-                    } else if &"}" == words.get(i + 1).expect("Should not occur")
-                        || &"]" == words.get(i + 1).expect("Should not occur")
-                        || &"}" == words.get(i).expect("Should not occur")
-                        || &"]" == words.get(i).expect("Should not occur")
-                    {
-                        pars -= 1;
-                    }
-                    buffer.push(j);
-                    if pars == 0 {
-                        break;
-                    }
-                }
-                pars -= 1;
-                if pars != 0 {
-                    panic!("Unmatched parentheses")
-                }
-                for j in buffer.iter().cloned() {
-                    if j < words.len() - 1 {
-                        words.remove(j);
-                    } else if j == words.len() {
-                        words.remove(j - 1);
-                    }
-                }
-            };
-        }
-        words.remove(i + 1);
-        words.remove(i);
-    }
-    let mut input = String::new();
-    for i in words.iter() {
-        input.push_str(i);
-        input.push(' ')
-    }
     Token::lexer(input.trim()).collect()
 }
 
@@ -413,13 +364,7 @@ mod tests {
     }
     #[test]
     fn discard_tests() {
-        let tokens = lex_str("#_ He \"llo\"");
-        assert_eq!(tokens, vec![Token::Str("llo".to_string())]);
-        let tokens = lex_str("#_ [ 1 2 3 ]");
-        assert_eq!(tokens, vec![]);
-        let tokens = lex_str("#_He \"llo\"");
-        assert_eq!(tokens, vec![Token::Str("llo".to_string())]);
-        let tokens = lex_str("#_[ 1 2 3 ]");
-        assert_eq!(tokens, vec![]);
+        let mut lexer = Token::lexer("#_");
+        assert_eq!(lexer.next(), Some(Token::Discard))
     }
 }
